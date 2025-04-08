@@ -1,0 +1,12 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+# lib folder files
+lib/*
+# Include all files in the lib folder
+lib64/
+# Include all files in the lib64 folder
+# Include all files in the bin folder
+bin/
+# Include all files in the include folder
+include/
+# Include all files in the share folder
+share/
