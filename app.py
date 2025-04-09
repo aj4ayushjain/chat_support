@@ -139,8 +139,9 @@ index = load_data()
 
 if "chat_engine" not in st.session_state.keys():
     # Configure response synthesizer to be more conservative
-    from llama_index.response_synthesizers import get_response_synthesizer
-    from llama_index.prompts import PromptTemplate
+    from llama_index.core.response_synthesizers import ResponseMode
+    from llama_index.core.prompts import PromptTemplate
+    from llama_index.core import get_response_synthesizer
 
     # Custom prompt that emphasizes saying "I don't know" when uncertain
     qa_template = PromptTemplate(
@@ -155,8 +156,8 @@ if "chat_engine" not in st.session_state.keys():
     )
 
     response_synthesizer = get_response_synthesizer(
-        response_mode="compact",
-        prompt_template=qa_template,
+        response_mode=ResponseMode.COMPACT,
+        summary_template=qa_template,
         streaming=True
     )
 
