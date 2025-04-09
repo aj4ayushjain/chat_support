@@ -11,5 +11,5 @@ include/
 # Include all files in the share folder
 share/
 # Include all . files
-*.
+.*
 
