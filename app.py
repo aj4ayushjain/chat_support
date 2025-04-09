@@ -1,6 +1,6 @@
 import os
 import streamlit as st
-from llama_index.core import Settings, SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core import Settings, VectorStoreIndex
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
 from dotenv import load_dotenv
@@ -8,6 +8,9 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.text_splitter import TokenTextSplitter
 from llama_index.core.schema import Document
 import tiktoken
+import re
+
+from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Load environment variables
 load_dotenv()
@@ -28,7 +31,24 @@ Settings.llm = OpenAI(
 )
 
 
-
+def initialize_chromadb():
+    # Setup ChromaDB for persistent storage
+    
+    import chromadb
+    # Create storage directory if it doesn't exist
+    storage_dir = "chroma_storage"
+    if not os.path.exists(storage_dir):
+        os.makedirs(storage_dir)
+        
+    # Initialize ChromaDB client with persistent storage
+    chroma_client = chromadb.PersistentClient(
+        path=storage_dir,
+        settings=chromadb.Settings(
+            anonymized_telemetry=False,
+            is_persistent=True
+        )
+    )
+    return chroma_client
 
 # Initialize embeddings (using OpenAI embeddings as Groq doesn't provide embeddings yet)
 Settings.embed_model = OpenAIEmbedding(
@@ -53,6 +73,33 @@ if "messages" not in st.session_state.keys():
     ]
 
 
+def clean_text(text):
+    """Clean text by removing excessive newlines and normalizing spacing."""
+    # Fix common PDF extraction issues
+    text = text.replace('\xa0', ' ')  # Replace non-breaking spaces
+    
+    # Fix numbers stuck together with words
+    text = re.sub(r'(\d+)([a-zA-Z])', r'\1 \2', text)  # Add space between number and letter
+    text = re.sub(r'([a-zA-Z])(\d+)', r'\1 \2', text)  # Add space between letter and number
+    
+    # Fix words stuck together
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)  # Add space between lower and uppercase
+    
+    # Replace multiple newlines with a single newline
+    text = re.sub(r'\n\s*\n', '\n', text)
+    
+    # Replace multiple spaces with a single space
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove leading/trailing whitespace from each line
+    text = '\n'.join(line.strip() for line in text.splitlines())
+    
+    # Normalize currency and numbers
+    text = re.sub(r'(\d),(\d)', r'\1\2', text)  # Remove commas in numbers
+    text = re.sub(r'(\d+)for', r'\1 for', text)  # Fix "for" stuck to numbers
+    
+    return text.strip()
+
 @st.cache_resource(show_spinner=False)
 def load_data():
     with st.spinner(text="Loading and indexing the documents - hang tight! This should take 1-2 minutes."):
@@ -75,8 +122,26 @@ def load_data():
         
         pdf_reader = PDFReader()
         docx_reader = DocxReader()
-        
-        # Process documents
+
+        chroma_client = initialize_chromadb()
+        collection_name = "knowledge_base"
+        chroma_collection = chroma_client.get_or_create_collection(name=collection_name)
+
+        # Create vector store
+        vector_store = ChromaVectorStore(
+            chroma_collection=chroma_collection
+        )
+
+        # Check if we have existing documents in the store
+        if chroma_collection.count() > 0:
+            st.info("Loading existing index from database...")
+            index = VectorStoreIndex.from_vector_store(
+                vector_store,
+                embed_model=Settings.embed_model
+            )
+            return index
+         
+        # Initialize empty list for processed documents
         processed_docs = []
         
         # Walk through the directory and process files
@@ -90,12 +155,15 @@ def load_data():
                         docs = docx_reader.load_data(file_path)
                     elif file.lower().endswith(('.txt', '.md')):
                         with open(file_path, 'r', encoding='utf-8') as f:
-                            docs = [Document(text=f.read(), metadata={"file_path": file_path})]
+                            text = clean_text(f.read())
+                            docs = [Document(text=text, metadata={"file_path": file_path})]
                     else:
                         continue
                     
                     # Process each document
                     for doc in docs:
+                        # Create new document with cleaned text
+                        doc = Document(text=clean_text(doc.text), metadata=doc.metadata)
                         # First split by sentences
                         sentence_nodes = sentence_splitter.get_nodes_from_documents([doc])
                         
@@ -120,15 +188,13 @@ def load_data():
                 except Exception as e:
                     st.warning(f"Failed to process {file}: {str(e)}")
                     continue
-        
-        if not processed_docs:
-            st.error("No documents were successfully processed. Please check your document formats and try again.")
-            return None
-        
+        print(processed_docs)
         # Create index with processed documents
-        st.info(f"Creating index with {len(processed_docs)} document chunks...")
+        st.info(f"Creating new index with {len(processed_docs)} document chunks...")
+
         index = VectorStoreIndex.from_documents(
-            processed_docs,
+            documents=processed_docs,
+            vector_store=vector_store,
             show_progress=True,
             embed_model=Settings.embed_model
         )
